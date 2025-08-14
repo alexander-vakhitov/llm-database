@@ -1,32 +1,37 @@
 from langchain_community.utilities import SQLDatabase
 from typing_extensions import TypedDict
+from langchain_community.tools.sql_database.tool import QuerySQLDatabaseTool
+from langchain.chat_models import init_chat_model
+from langchain_core.prompts import ChatPromptTemplate
+from typing_extensions import Annotated
+from langgraph.graph import START, StateGraph
+
+import argparse
 import os
+
 
 class State(TypedDict):
     question: str
     query: str
     result: str
     answer: str
-    
 
-if __name__ == '__main__':
-    # db = SQLDatabase.from_uri("sqlite:///Chinook.db")
-    db = SQLDatabase.from_uri("sqlite:///aware_data.db")
-    print(db.dialect)
-    print(db.get_usable_table_names())
+
+class QueryOutput(TypedDict):
+    """Generated SQL query."""
+
+    query: Annotated[str, ..., "Syntactically valid SQL query."]
+
+
+def request_with_a_single_query(question, db, llm):
     # db.run("SELECT * FROM Artist LIMIT 10;")
-    
+
     # AIzaSyBISAXX0l6wJDcBzJdVYD8cQxVseUbctuw
-    
+
     if not os.environ.get("GOOGLE_API_KEY"):
         os.environ["GOOGLE_API_KEY"] = "AIzaSyBISAXX0l6wJDcBzJdVYD8cQxVseUbctuw"
 
-    from langchain.chat_models import init_chat_model
-
     llm = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
-    llm.invoke("Hello, world!")
-    
-    from langchain_core.prompts import ChatPromptTemplate
 
     system_message = """
     Given an input question, create a syntactically correct {dialect} query to
@@ -54,15 +59,6 @@ if __name__ == '__main__':
 
     for message in query_prompt_template.messages:
         message.pretty_print()
-        
-    from typing_extensions import Annotated
-
-
-    class QueryOutput(TypedDict):
-        """Generated SQL query."""
-
-        query: Annotated[str, ..., "Syntactically valid SQL query."]
-
 
     def write_query(state: State):
         """Generate SQL query to fetch information."""
@@ -77,7 +73,95 @@ if __name__ == '__main__':
         structured_llm = llm.with_structured_output(QueryOutput)
         result = structured_llm.invoke(prompt)
         return {"query": result["query"]}
-    
-    # print(write_query({"question": "How many Employees are there?"}))
-    print(write_query({"question": "How many forklifts are there?"}))
 
+    def execute_query(state: State):
+        """Execute SQL query."""
+        execute_query_tool = QuerySQLDatabaseTool(db=db)
+        return {"result": execute_query_tool.invoke(state["query"])}
+
+    def generate_answer(state: State):
+        """Answer question using retrieved information as context."""
+        prompt = (
+            "Given the following user question, corresponding SQL query, "
+            "and SQL result, answer the user question.\n\n"
+            f"Question: {state['question']}\n"
+            f"SQL Query: {state['query']}\n"
+            f"SQL Result: {state['result']}"
+        )
+        response = llm.invoke(prompt)
+        return {"answer": response.content}
+
+    graph_builder = StateGraph(State).add_sequence(
+        [write_query, execute_query, generate_answer]
+    )
+    graph_builder.add_edge(START, "write_query")
+    graph = graph_builder.compile()
+
+    for step in graph.stream({"question": question}, stream_mode="updates"):
+        print(step)
+
+
+def request_with_an_agent(question, db, llm):
+    system_message = """
+    You are an agent designed to interact with a SQL database.
+    Given an input question, create a syntactically correct {dialect} query to run,
+    then look at the results of the query and return the answer. Unless the user
+    specifies a specific number of examples they wish to obtain, always limit your
+    query to at most {top_k} results.
+
+    You can order the results by a relevant column to return the most interesting
+    examples in the database. Never query for all the columns from a specific table,
+    only ask for the relevant columns given the question.
+
+    You MUST double check your query before executing it. If you get an error while
+    executing a query, rewrite the query and try again.
+
+    DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the
+    database.
+
+    To start you should ALWAYS look at the tables in the database to see what you
+    can query. Do NOT skip this step.
+
+    Then you should query the schema of the most relevant tables.
+    """.format(
+        dialect="SQLite",
+        top_k=5,
+    )
+    from langchain_core.messages import HumanMessage
+    from langchain_community.agent_toolkits import SQLDatabaseToolkit
+
+    toolkit = SQLDatabaseToolkit(db=db, llm=llm)
+
+    tools = toolkit.get_tools()
+
+    from langgraph.prebuilt import create_react_agent
+
+    agent_executor = create_react_agent(llm, tools, prompt=system_message)
+
+    for step in agent_executor.stream(
+        {"messages": [{"role": "user", "content": question}]},
+        stream_mode="values",
+    ):
+        step["messages"][-1].pretty_print()
+
+
+if __name__ == "__main__":
+    is_single_query = False
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("question")
+    args = parser.parse_args()
+    # db = SQLDatabase.from_uri("sqlite:///Chinook.db")
+    db = SQLDatabase.from_uri("sqlite:///aware_data.db")
+    print(db.dialect)
+    print(db.get_usable_table_names())
+
+    if not os.environ.get("GOOGLE_API_KEY"):
+        os.environ["GOOGLE_API_KEY"] = "AIzaSyBISAXX0l6wJDcBzJdVYD8cQxVseUbctuw"
+
+    llm = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
+
+    if is_single_query:
+        request_with_a_single_query(args.question, db, llm)
+    else:
+        request_with_an_agent(args.question, db, llm)
