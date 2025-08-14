@@ -46,7 +46,7 @@ def get_activity_periods(min_time_interval_ns, shift_start, shift_end, timestamp
     time_periods = []
     for ts in timestamps:
         if ts - previous_timestamp > min_time_interval_ns:
-             # enough time passed, time to save
+             # let's make a record of an inactivity period > min_time_interval_ns
              if previous_recorded_timestamp is not None:
                 time_periods.append((previous_recorded_timestamp, previous_timestamp, 1))
              time_periods.append((previous_timestamp, ts, 0))
