@@ -8,6 +8,7 @@ from langgraph.graph import START, StateGraph
 
 import argparse
 import os
+from enum import Enum
 
 
 class State(TypedDict):
@@ -102,15 +103,22 @@ def request_with_a_single_query(question, db, llm):
 
 
 def request_with_an_agent(question, db, llm):
-    system_message = """
-    You are an agent designed to interact with a SQL database.
-    Given an input question, create a syntactically correct {dialect} query to run,
-    then look at the results of the query and return the answer. Unless the user
+    system_message_reliable = """
+    You are a reliable agent designed to interact with a SQL database.
+    Given an input question, three times go through the following procedure: 
+    create a syntactically correct {dialect} query to run,
+    then look at the results of the query and obtain the answer. First time use 
+    exactly the question provided by the user, two other times use an equivalent 
+    re-formulated question. After geting three answers, check that those answers
+    are consistent, generate a single final answer and give it out to the user.
+    If the answers are not consistent, please let the user know.
+    If the question cannot be answered using the database, let the user know.
+    
+    Unless the user
     specifies a specific number of examples they wish to obtain, always limit your
     query to at most {top_k} results.
 
-    You can order the results by a relevant column to return the most interesting
-    examples in the database. Never query for all the columns from a specific table,
+    You can order the results by a relevant column. Never query for all the columns from a specific table,
     only ask for the relevant columns given the question.
 
     You MUST double check your query before executing it. If you get an error while
@@ -122,11 +130,39 @@ def request_with_an_agent(question, db, llm):
     To start you should ALWAYS look at the tables in the database to see what you
     can query. Do NOT skip this step.
 
-    Then you should query the schema of the most relevant tables.
+    Then you should query the schema of the most relevant tables.        
+        
     """.format(
         dialect="SQLite",
         top_k=5,
     )
+
+    system_message = """
+You are an agent designed to interact with a SQL database.
+Given an input question, create a syntactically correct {dialect} query to run,
+then look at the results of the query and return the answer. Unless the user
+specifies a specific number of examples they wish to obtain, always limit your
+query to at most {top_k} results.
+
+You can order the results by a relevant column to return the most interesting
+examples in the database. Never query for all the columns from a specific table,
+only ask for the relevant columns given the question.
+
+You MUST double check your query before executing it. If you get an error while
+executing a query, rewrite the query and try again.
+
+DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the
+database.
+
+To start you should ALWAYS look at the tables in the database to see what you
+can query. Do NOT skip this step.
+
+Then you should query the schema of the most relevant tables.
+""".format(
+        dialect="SQLite",
+        top_k=5,
+    )
+
     from langchain_core.messages import HumanMessage
     from langchain_community.agent_toolkits import SQLDatabaseToolkit
 
@@ -145,8 +181,15 @@ def request_with_an_agent(question, db, llm):
         step["messages"][-1].pretty_print()
 
 
+class LLMType(Enum):
+    GEMINI = 1
+    MISTRAL = 2
+    OPENAI = 3
+
+
 if __name__ == "__main__":
     is_single_query = False
+    llm_type = LLMType.OPENAI
 
     parser = argparse.ArgumentParser()
     parser.add_argument("question")
@@ -156,11 +199,19 @@ if __name__ == "__main__":
     print(db.dialect)
     print(db.get_usable_table_names())
 
-    if not os.environ.get("GOOGLE_API_KEY"):
-        os.environ["GOOGLE_API_KEY"] = "AIzaSyBISAXX0l6wJDcBzJdVYD8cQxVseUbctuw"
+    if llm_type == LLMType.GEMINI:
+        os.environ["GOOGLE_API_KEY"] = "AIzaSyDVxtt7BC20WErpwPerZkTkl-JqmtSuaBo"
+        if not os.environ.get("GOOGLE_API_KEY"):
+            os.environ["GOOGLE_API_KEY"] = "AIzaSyBISAXX0l6wJDcBzJdVYD8cQxVseUbctuw"
 
-    llm = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
-
+        llm = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
+    elif llm_type == LLMType.MISTRAL:
+        os.environ["MISTRAL_API_KEY"] = "zDyBZHJujQwCjujL2u7yRRU1NLCiccnL"
+        llm = init_chat_model("mistral-large-latest", model_provider="mistralai")
+    else:
+        if not os.environ.get("OPENAI_API_KEY"):
+            os.environ["OPENAI_API_KEY"] = ""
+        llm = init_chat_model("gpt-5-mini", model_provider="openai")
     if is_single_query:
         request_with_a_single_query(args.question, db, llm)
     else:
