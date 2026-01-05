@@ -17,7 +17,7 @@ if __name__ == "__main__":
     b_x = df[" bx"]
     b_y = df[" by"]
     distance_to_pedestrian = np.sqrt(b_x * b_x + b_y * b_y)
-    timestamps = df[" aq_ts"]
+    timestamps = df["#hw_ts"]
 
     dT_min = (timestamps[len(timestamps) - 1] - timestamps[0]) / 1e9 / 60
     print(f"Dataset lasts {dT_min} minutes")

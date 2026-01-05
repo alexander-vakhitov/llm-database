@@ -23,11 +23,19 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output-folder", required=True)
     args = parser.parse_args()
 
-    cam0_csv_path = Path(args.dataset) / "data.csv"
+    cam0_csv_path = Path(args.dataset) / "cam0" / "data.csv"
     df = pandas.read_csv(cam0_csv_path)
     ts2file = {}
     for row in df.values:
-        ts2file[int(row[0])] = Path(args.dataset) / "data" / row[1]
+        if np.isnan(row[0]):
+            continue
+        image_path = Path(args.dataset) / "cam0" / "data" / str(row[1])
+        # if not image_path.exists():
+        # print(f"No path on disk: {image_path}")
+        # continue
+        ts2file[int(row[0])] = image_path  # acquisition timestamp to path
+
+    print("Loaded image paths")
 
     all_timestamps = np.array(sorted(ts2file.keys()))
 
@@ -41,6 +49,7 @@ if __name__ == "__main__":
         timestamp_mask = (all_timestamps >= start_timestamp) & (
             all_timestamps <= end_timestamp
         )
+        print(f"Proc timestamp {middle_timestamp} mask size: {np.sum(timestamp_mask)}")
 
         out = None
         for ts in all_timestamps[timestamp_mask]:
@@ -48,11 +57,16 @@ if __name__ == "__main__":
             img = cv2.imread(ts2file[ts], 0)
             if out is None:
                 frame_height, frame_width = img.shape
+                if not Path(args.output_folder).exists():
+                    Path(args.output_folder).mkdir()
+                output_path = Path(args.output_folder) / f"{middle_timestamp}.mp4"
+                print("writing video .. " + str(output_path))
                 out = cv2.VideoWriter(
                     Path(args.output_folder) / f"{middle_timestamp}.mp4",
                     fourcc,
                     15.0,
                     (frame_width, frame_height),
+                    0,
                 )
             out.write(img)
 
